@@ -185,6 +185,26 @@ pub enum Command {
     },
     /// 列出全部题型。
     Types,
+    /// 课堂小测清单（`workType=1`）。
+    HwList {
+        /// 只看已批阅的。
+        rated: bool,
+        /// 只看待批阅的。
+        unrated: bool,
+        /// 按名字模糊过滤。
+        name: Option<String>,
+        /// 打印原始 JSON。
+        raw: bool,
+    },
+    /// 课堂小测作答明细。
+    HwShow {
+        work_id: String,
+        raw: bool,
+    },
+    /// 课堂小测还能不能做（服务端探针，只读）。
+    HwCan {
+        work_id: String,
+    },
 }
 
 /// 解析命令行参数。
@@ -208,6 +228,37 @@ pub fn parse(args: &[String]) -> Result<Command> {
             unit: flag_value(rest, "--unit"),
         }),
         "types" => Ok(Command::Types),
+        "hw" => {
+            // uai hw                     列出全部课堂小测
+            // uai hw list [--rated|--unrated] [--name 关键字] [--raw]
+            // uai hw show <作业ID> [--raw]
+            // uai hw can  <作业ID>
+            let sub = positional(rest, 0)
+                .cloned()
+                .unwrap_or_else(|| "list".to_owned());
+            match sub.as_str() {
+                "list" => Ok(Command::HwList {
+                    rated: rest.iter().any(|flag| flag == "--rated"),
+                    unrated: rest.iter().any(|flag| flag == "--unrated"),
+                    name: flag_value(rest, "--name"),
+                    raw: rest.iter().any(|flag| flag == "--raw"),
+                }),
+                "show" => Ok(Command::HwShow {
+                    work_id: positional(rest, 1).cloned().ok_or_else(|| {
+                        Error::invalid("`hw show` 缺少参数：作业 ID（`uai hw` 里有）")
+                    })?,
+                    raw: rest.iter().any(|flag| flag == "--raw"),
+                }),
+                "can" => Ok(Command::HwCan {
+                    work_id: positional(rest, 1).cloned().ok_or_else(|| {
+                        Error::invalid("`hw can` 缺少参数：作业 ID（`uai hw` 里有）")
+                    })?,
+                }),
+                other => Err(Error::invalid(format!(
+                    "未知的 `hw` 子命令：{other}（可用：list / show / can）"
+                ))),
+            }
+        }
         "submit" => {
             let (instance_id, group_id) = two(rest, "submit")?;
             Ok(Command::Submit {
@@ -603,6 +654,14 @@ U校园接口调试 CLI
                                            --page-base   真实任务页前缀，不信用默认值时可覆盖
                                          Ctrl-C 停止；时间戳不可伪造，账只按真实时间走
   types                                 列出全部题型及其评分说明
+  hw [list] [--rated|--unrated] [--name 关键字] [--raw]
+                                        课堂小测（workType=1）清单，按提交时间倒序
+                                          --rated    只看已批阅
+                                          --unrated  只看待批阅（分数还没出）
+                                          --name K   按名字模糊过滤
+  hw show <作业ID> [--raw]               单个小测的作答明细（文本/附件/录音）
+  hw can  <作业ID>                       还能不能再做（服务端 work/enter 探针，只读）
+                                        已交过 → 40004，结论就是「不能」
   help                                  显示本帮助
 
 凭据：

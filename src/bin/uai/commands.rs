@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use uai_core::api::targets::PlanOptions;
 use uai_core::api::{
-    answer, assessment, bookshelf, catalog, content, course_list, group_state, progress,
+    answer, assessment, bookshelf, catalog, content, course_list, group_state, homework, progress,
     speech_eval, submit, targets, user_info,
 };
 use uai_core::error::{Error, Result};
@@ -153,6 +153,14 @@ pub fn run(command: Command) -> Result<()> {
             unit,
         } => record_cmd(&course_resource_id, unit.as_deref()),
         Command::Types => types_cmd(),
+        Command::HwList {
+            rated,
+            unrated,
+            name,
+            raw,
+        } => hw_list_cmd(rated, unrated, name.as_deref(), raw),
+        Command::HwShow { work_id, raw } => hw_show_cmd(&work_id, raw),
+        Command::HwCan { work_id } => hw_can_cmd(&work_id),
     }
 }
 
@@ -2365,6 +2373,219 @@ fn targets_cmd(
     }
 
     println!("\n预计提交阶段：{} 次请求", kept.len() * 4);
+    Ok(())
+}
+
+/// 毫秒时间戳 → `MM-DD HH:MM`。0/负数当作「未设置」。
+fn format_stamp(millis: i64) -> String {
+    if millis <= 0 {
+        return "—".to_owned();
+    }
+    let total_secs = millis / 1000;
+    let days = total_secs.div_euclid(86_400);
+    let secs_of_day = total_secs.rem_euclid(86_400);
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}",
+        secs_of_day / 3600,
+        secs_of_day % 3600 / 60
+    )
+}
+
+/// 课堂小测清单。
+fn hw_list_cmd(rated: bool, unrated: bool, name: Option<&str>, raw: bool) -> Result<()> {
+    if rated && unrated {
+        return Err(Error::invalid("`--rated` 与 `--unrated` 互斥"));
+    }
+    let session = require_session()?;
+    let client = build_cookie_client()?;
+    let host = session.host_identity();
+
+    let works = homework::fetch_all(&client, &session.portal_token, &host)?;
+
+    let needle = name.map(|value| value.to_lowercase());
+    let shown: Vec<&homework::Work> = works
+        .iter()
+        .filter(|work| {
+            if rated && !work.is_rated() {
+                return false;
+            }
+            if unrated && work.is_rated() {
+                return false;
+            }
+            match &needle {
+                Some(needle) => work.name.to_lowercase().contains(needle),
+                None => true,
+            }
+        })
+        .collect();
+
+    if raw {
+        let payload: Vec<Value> = shown
+            .iter()
+            .map(|work| {
+                json!({
+                    "id": work.id,
+                    "name": work.name,
+                    "courseName": work.course_name,
+                    "score": work.score,
+                    "totalPoints": work.total_points,
+                    "submitTime": work.submit_time,
+                    "submitStatus": work.submit_status,
+                    "rateStatus": work.rate_status,
+                    "canAnswer": work.can_answer,
+                    "redoFlag": work.redo_flag,
+                })
+            })
+            .collect();
+        print_json(&Value::Array(payload));
+        return Ok(());
+    }
+
+    if shown.is_empty() {
+        println!("没有符合条件的小测（全集 {} 条）", works.len());
+        return Ok(());
+    }
+
+    let rated_count = works.iter().filter(|work| work.is_rated()).count();
+    println!(
+        "课堂小测（workType=1）共 {} 条：已批阅 {} · 待批阅 {}\n",
+        works.len(),
+        rated_count,
+        works.len() - rated_count
+    );
+
+    println!(
+        "{:<18} {:>11}  {:<44} {}",
+        "提交时间", "得分", "名称", "作业 ID"
+    );
+    for work in &shown {
+        let score = match (work.score, work.is_rated()) {
+            (Some(score), true) => format!("{score:.2}/{:.2}", work.total_points),
+            _ => format!("待批/{:.2}", work.total_points),
+        };
+        let mut name_text = work.name.clone();
+        if name_text.chars().count() > 42 {
+            name_text = name_text.chars().take(41).collect::<String>() + "…";
+        }
+        println!(
+            "{:<18} {:>11}  {:<44} {}",
+            format_stamp(work.submit_time.unwrap_or(0)),
+            score,
+            name_text,
+            work.id
+        );
+    }
+
+    let scored: Vec<f64> = works.iter().filter_map(|work| work.score).collect();
+    if !scored.is_empty() {
+        let total: f64 = scored.iter().sum();
+        println!(
+            "\n平均分：{:.2}（{} 条已批阅）",
+            total / scored.len() as f64,
+            scored.len()
+        );
+    }
+    Ok(())
+}
+
+/// 单个小测的作答明细。
+fn hw_show_cmd(work_id: &str, raw: bool) -> Result<()> {
+    let session = require_session()?;
+    let client = build_cookie_client()?;
+    let host = session.host_identity();
+
+    // 名字/分数在清单里，多打一次清单比让用户自己对照更省事。
+    let meta = homework::fetch_all(&client, &session.portal_token, &host)
+        .ok()
+        .and_then(|works| works.into_iter().find(|work| work.id == work_id));
+
+    let answers = homework::fetch_answers(&client, &session.portal_token, &host, work_id)?;
+
+    match &meta {
+        Some(work) => {
+            println!("{}", work.name);
+            println!(
+                "  课程　　：{}（courseId={}）",
+                work.course_name, work.course_id
+            );
+            println!(
+                "  得分　　：{}",
+                match (work.score, work.is_rated()) {
+                    (Some(score), true) => format!("{score:.2} / {:.2}", work.total_points),
+                    _ => format!("待批阅（满分 {:.2}）", work.total_points),
+                }
+            );
+            println!(
+                "  提交时间：{}",
+                format_stamp(work.submit_time.unwrap_or(0))
+            );
+        }
+        None => println!("作业 {work_id}（清单里没找到，可能不属于当前班级）"),
+    }
+    println!(
+        "  作答时长：{} 秒 · 题目 {} 道\n",
+        answers.duration,
+        answers.answers.len()
+    );
+
+    if answers.is_blank() {
+        println!("（这份作答是空的）");
+        return Ok(());
+    }
+
+    for (index, answer) in answers.answers.iter().enumerate() {
+        println!("{}. 题目 {}", index + 1, answer.instance_id);
+        if raw {
+            print_json(
+                answer
+                    .value
+                    .as_ref()
+                    .unwrap_or(&Value::String(answer.raw.clone())),
+            );
+            continue;
+        }
+        let texts = answer.filled_texts();
+        if texts.is_empty() {
+            println!("   文本：（空）");
+        } else {
+            println!("   文本：{}", texts.join(" | "));
+        }
+        for url in answer.file_urls() {
+            println!("   附件：{url}");
+        }
+        for url in answer.record_urls() {
+            println!("   录音：{url}");
+        }
+        println!();
+    }
+    Ok(())
+}
+
+/// 服务端当下还允不允许重做。
+fn hw_can_cmd(work_id: &str) -> Result<()> {
+    let session = require_session()?;
+    let client = build_cookie_client()?;
+    let host = session.host_identity();
+
+    let allowed = homework::can_answer(&client, &session.portal_token, &host, work_id)?;
+    if allowed {
+        println!("可以作答：作业 {work_id} 在服务端仍是开放状态。");
+    } else {
+        println!("不能再做：作业 {work_id} 已提交（服务端 work/enter 回 40004）。");
+        println!(
+            "提交接口同样会回 40002（已作答，无法重复提交）——这是服务端作答锁，\n\
+             清单里的 canAnswer=0 / redoFlag=0 与之一致。"
+        );
+    }
     Ok(())
 }
 

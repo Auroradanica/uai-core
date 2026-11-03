@@ -102,6 +102,47 @@ pub const PORTAL_STUDY_RECORD_TOTAL: &str =
 /// role == "group" 的叶子上，required 标记该叶子是否必修。
 pub const PORTAL_STUDY_RECORD_UNIT: &str = "/api/tla/learningDetail/studyRecord/unitTaskSituation";
 
+// ─────────────────────────── 课堂小测 ───────────────────────────
+//
+// 全部在 `uai.unipus.cn`，全部 POST，全部要宿主头 + 门户 JWT。
+// `workType=1` 就是课堂小测（`2` 是课后作业，本账号恒为空）。
+
+/// 小测清单。
+///
+/// body `{workName, workType, pageNum, pageSize, status}`。
+/// ⚠️ **`status` 必填**：不给 → `{code:100, value:null}`。
+///
+/// | `status` | 含义 | 实测 |
+/// | --- | --- | --- |
+/// | 0 | 待提交 | 本账号 0 条 |
+/// | 1 | 已交、待批阅 | 3 条（`rateStatus=0`） |
+/// | 2 | 已交、已批阅 | 21 条（`rateStatus=1`） |
+/// | 3 | — | `code:100` |
+///
+/// 即 `status` 是**批阅状态**而不是「交没交」；`submitStatus` 才是提交状态。
+/// `total` 随 `status` 变化，所以是把两个值都拉一遍再合并。
+pub const HW_WORK_LIST: &str = "/api/hwucs/student/work/list";
+
+/// 读作答快照。body `{workId}` → `value.quesDataList[].answer`。
+///
+/// `answer` 是一段**再套一层的 JSON 字符串**，结构
+/// `{value:[...], children:[{value:[...], isDone, desc, fileList, record}], record:{url}}`。
+/// 附件在 `children[].fileList[]`（`name/type/url`），录音在 `children[].record.url`。
+/// 已交/未交都能读，不需要 `work/enter`。
+pub const HW_ANSWER_LOAD: &str = "/api/hwucs/student/answer/load";
+
+/// 进入作答（开考）。body `{workId}`。
+///
+/// 已交过时返回 **`40004`**（作业已提交）；这是判断「还能不能做」的**唯一**
+/// 无副作用探针——`submit` 撞 `40002` 也是同一个锁，但那是写请求。
+pub const HW_WORK_ENTER: &str = "/api/hwucs/student/work/enter";
+
+/// 交卷。body `{workId, token, forceSubmit, duration, quesDataList}`。
+///
+/// 已交过 → **`40002`**（已作答，无法重复提交）。服务端锁，客户端绕不过：
+/// 改 `submitStatus`、删本地记录、重放 `enter` 都试过，全部 `40002`。
+pub const HW_ANSWER_SUBMIT: &str = "/api/hwucs/student/answer/submit";
+
 // ────────────────── 门户「微应用宿主」请求头 ──────────────────
 //
 // ⚠️ /api/aca/* 是受保护的。 只带 Authorization 会拿到

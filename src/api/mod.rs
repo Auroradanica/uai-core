@@ -45,6 +45,7 @@ pub mod content;
 pub mod course_list;
 pub mod duration;
 pub mod group_state;
+pub mod homework;
 pub mod login;
 pub mod media;
 pub mod progress;
