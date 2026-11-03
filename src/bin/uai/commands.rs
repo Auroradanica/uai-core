@@ -512,12 +512,11 @@ fn grade_cmd(course_resource_id: &str, plan_only: bool) -> Result<()> {
                 format!("参与 {times} 次")
             } else if let Some(t) = book.submit_time.as_deref() {
                 // 作业/考试类（item=31/33）：这里的值就是提交时间。
-                let pretty = if t.trim().is_empty() {
+                if t.trim().is_empty() {
                     "未提交".to_owned()
                 } else {
                     format!("提交 {}", format_millis(t.trim()))
-                };
-                pretty
+                }
             } else {
                 String::new()
             };
@@ -2464,8 +2463,8 @@ fn hw_list_cmd(rated: bool, unrated: bool, name: Option<&str>, raw: bool) -> Res
     );
 
     println!(
-        "{:<18} {:>11}  {:<44} {}",
-        "提交时间", "得分", "名称", "作业 ID"
+        "{:<18} {:>11}  {:<44} 作业 ID",
+        "提交时间", "得分", "名称"
     );
     for work in &shown {
         let score = match (work.score, work.is_rated()) {
