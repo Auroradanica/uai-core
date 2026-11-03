@@ -502,6 +502,14 @@ fn grade_cmd(course_resource_id: &str, plan_only: bool) -> Result<()> {
                 )
             } else if let Some(times) = book.completed_times {
                 format!("参与 {times} 次")
+            } else if let Some(t) = book.submit_time.as_deref() {
+                // 作业/考试类（item=31/33）：这里的值就是提交时间。
+                let pretty = if t.trim().is_empty() {
+                    "未提交".to_owned()
+                } else {
+                    format!("提交 {}", format_millis(t.trim()))
+                };
+                pretty
             } else {
                 String::new()
             };
