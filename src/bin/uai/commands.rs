@@ -2462,10 +2462,7 @@ fn hw_list_cmd(rated: bool, unrated: bool, name: Option<&str>, raw: bool) -> Res
         works.len() - rated_count
     );
 
-    println!(
-        "{:<18} {:>11}  {:<44} 作业 ID",
-        "提交时间", "得分", "名称"
-    );
+    println!("{:<18} {:>11}  {:<44} 作业 ID", "提交时间", "得分", "名称");
     for work in &shown {
         let score = match (work.score, work.is_rated()) {
             (Some(score), true) => format!("{score:.2}/{:.2}", work.total_points),
@@ -2484,13 +2481,20 @@ fn hw_list_cmd(rated: bool, unrated: bool, name: Option<&str>, raw: bool) -> Res
         );
     }
 
-    let scored: Vec<f64> = works.iter().filter_map(|work| work.score).collect();
-    if !scored.is_empty() {
-        let total: f64 = scored.iter().sum();
+    // 平均分按**加权**算：Σ得分 / Σ满分。直接对分数取算术平均会被满分不同的
+    // 小测带偏（6/6 和 16/20 权重相同就错了）。
+    let (mut got, mut full, mut count) = (0.0_f64, 0.0_f64, 0_usize);
+    for work in works.iter().filter(|work| work.is_rated()) {
+        if let Some(score) = work.score {
+            got += score;
+            full += work.total_points;
+            count += 1;
+        }
+    }
+    if count > 0 && full > 0.0 {
         println!(
-            "\n平均分：{:.2}（{} 条已批阅）",
-            total / scored.len() as f64,
-            scored.len()
+            "\n总分：{got:.2}/{full:.2} · 加权均分：{:.1}%（{count} 条已批阅）",
+            got / full * 100.0
         );
     }
     Ok(())

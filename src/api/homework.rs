@@ -23,9 +23,13 @@
 //!
 //! ## 分数口径
 //!
-//! `score` 是百分制小数（6.0 / 5.55），`totalPoints` 是满分（6 / 10），
-//! `pointSystem` 是放大倍数（`600` / `1000`）。**`score` 已经是分数本身**，
-//! 不要再除以 `pointSystem`——那是给前端画进度条的。
+//! `score` 是这条小测的**原始分**，单位就是 `totalPoints`（实测满分从 5 到 24 不等，
+//! 所以 `6.0` 可能是满分、`5.55` 可能是半分）。`pointSystem` 恒等于
+//! `totalPoints × 100`（6 分 → `600`），是前端画进度条用的放大倍数。
+//! **不要拿 `pointSystem` 去折算 `score`**——它俩不是同一个坐标系。
+//!
+//! 要横向比较只能自己算百分比 `score / totalPoints`。本模块不替你做这个决定，
+//! 只把两个原值都给出来。
 
 use serde_json::{Value, json};
 
@@ -55,7 +59,7 @@ pub struct Work {
     pub total_points: f64,
     /// 放大倍数（600 / 1000），供前端画条用，**不要**拿它折算 `score`。
     pub point_system: i64,
-    /// 得分。百分制小数；未批阅时为 `None`。
+    /// 得分。原始分，满分见 `total_points`；未批阅时为 `None`。
     pub score: Option<f64>,
     /// 提交状态：0 未提交、2 已提交。
     pub submit_status: i64,
